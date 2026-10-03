@@ -45,9 +45,9 @@ label input{width:18px;height:18px;accent-color:var(--mango)}
 <form class="card" id="f" autocomplete="off">
   <div class="kick">Shoe Gallery &middot; Preview</div>
   <h1>The Long Way Home</h1>
-  <p>A first look at the release-day game. Enter the passphrase to play.</p>
-  <input type="password" id="pw" placeholder="Passphrase" autocapitalize="off" autocorrect="off" spellcheck="false"
-         aria-label="Passphrase">
+  <p>A first look at the release-day game. Enter the code to play.</p>
+  <input type="password" id="pw" placeholder="Code" autocapitalize="off" autocorrect="off" spellcheck="false"
+         inputmode="numeric" aria-label="Code">
   <button id="go" type="submit">Play</button>
   <label><input type="checkbox" id="rem" checked> Remember on this device</label>
   <div class="bar" id="bar" aria-hidden="true"><i id="fill"></i></div>
@@ -109,7 +109,7 @@ label input{width:18px;height:18px;accent-color:var(--mango)}
       busy(false); prog(0);
       if (e && e.pass) {
         try { localStorage.removeItem(KEY); } catch (x) {}
-        if (!silent) { say('That passphrase didn’t work.'); const f = $('f'); f.classList.remove('shake'); void f.offsetWidth; f.classList.add('shake'); $('pw').select(); }
+        if (!silent) { say('That code didn’t work.'); const f = $('f'); f.classList.remove('shake'); void f.offsetWidth; f.classList.add('shake'); $('pw').select(); }
       } else { say('Something went wrong loading the game. Check your connection and try again.'); console.warn(e); }
     }
   }
