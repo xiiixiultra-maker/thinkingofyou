@@ -124,6 +124,7 @@ label input{width:18px;height:18px;accent-color:var(--mango)}
     try {
       const [M, v] = await Promise.all([meta, cachedVersion()]);
       if (v && v === M.v) { busy(true, 'Opening'); await sw; location.replace('app/'); return; }   // already unlocked here
+      if (v) { try { await caches.delete(CACHE); } catch (e) {} }   // an older build: wipe it, the current code unlocks the new one
     } catch (e) { /* fall through to the form */ }
     let saved = null; try { saved = localStorage.getItem(KEY); } catch (e) {}
     if (saved) unlock(saved, false, true); else $('pw').focus();
