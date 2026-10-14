@@ -13,7 +13,7 @@ self.addEventListener('fetch', e => {
         const r = await fetch(new URL('bundle.json', self.registration.scope).href, { cache: 'no-cache' });
         if (r.ok) {
           const M = await r.json(), have = await c.match(new URL('app/__v', self.registration.scope).href);
-          if (!have || (await have.text()) !== M.v) { await caches.delete(CACHE); return Response.redirect(self.registration.scope, 302); }
+          if (!have || (await have.text()) !== M.v) return Response.redirect(self.registration.scope, 302);
         }
       } catch (err) { /* offline: play the build that's here */ }
     }
