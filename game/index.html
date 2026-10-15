@@ -60,6 +60,8 @@ label input{width:18px;height:18px;accent-color:var(--mango)}
   const b64d = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
   const KEY = 'ltwh.gate', CACHE = 'ltwh-game';
   const at = p => new URL(p, location.href).href;
+  // game/#board opens the big-screen high-score board instead of the game (the store's TV), 10/14
+  const DEST = location.hash === '#board' ? 'app/scores/board.html' : 'app/';
   const ok = window.isSecureContext && 'serviceWorker' in navigator && 'caches' in window && 'DecompressionStream' in window;
   const meta = fetch('bundle.json', { cache: 'no-cache' }).then(r => { if (!r.ok) throw new Error('bundle.json ' + r.status); return r.json(); });
   const sw = ok ? navigator.serviceWorker.register('sw.js').then(() => navigator.serviceWorker.ready) : null;
@@ -104,7 +106,7 @@ label input{width:18px;height:18px;accent-color:var(--mango)}
       await c.put(at('app/__v'), new Response(head.v, { headers: { 'Content-Type': 'text/plain' } }));
       prog(1); busy(true, 'Ready');
       await sw;
-      location.replace('app/');
+      location.replace(DEST);
     } catch (e) {
       busy(false); prog(0);
       if (e && e.pass) {
@@ -123,7 +125,7 @@ label input{width:18px;height:18px;accent-color:var(--mango)}
     if (!ok) { busy(true, 'Play'); say('This preview needs a regular Chrome or Safari window (private windows can’t open it).'); return; }
     try {
       const [M, v] = await Promise.all([meta, cachedVersion()]);
-      if (v && v === M.v) { busy(true, 'Opening'); await sw; location.replace('app/'); return; }   // already unlocked here
+      if (v && v === M.v) { busy(true, 'Opening'); await sw; location.replace(DEST); return; }   // already unlocked here
       if (v) { try { await caches.delete(CACHE); } catch (e) {} }   // an older build: wipe it, the current code unlocks the new one
     } catch (e) { /* fall through to the form */ }
     let saved = null; try { saved = localStorage.getItem(KEY); } catch (e) {}
