@@ -35,7 +35,7 @@ const setPlayer = p => { if (TABLET) tabletPlayer = p; else store.set(PLAYER_KEY
 const deviceId = () => TABLET ? 'tab-' + device + '-' + playerN : device;
 
 const S = { run: null, ticketTry: 0, ticketTimer: 0, state: 'idle', result: null, error: '', pending: null, onAgain: null,
-  onNext: null, root: null, pill: null, view: null, busy: false, idleTimer: 0 };
+  onNext: null, root: null, pill: null, view: null, busy: null, retrying: false, idleTimer: 0 };
 
 const demo = () => !ENDPOINT && !!window.LTWH_DBG;
 let demoBest = 0;
@@ -45,9 +45,14 @@ function demoBoard() {
   if (me.name && demoBest) rows.push({ name: me.name, score: demoBest });
   return rows.sort((a, b) => b.score - a.score);
 }
+
+const demoTries = {};
 function demoPost(body) {
   if (body.type === 'start') return Promise.resolve({ ok: true, run: 'demo-' + Date.now() });
   if (body.type !== 'score') return Promise.resolve({ ok: true });
+  const k = demoTries[body.run] = (demoTries[body.run] || 0) + 1;
+  if (k <= (+window.LTWH_DEMO_BUSY || 0)) return new Promise((ok, fail) => setTimeout(() => k % 2 ? fail(new TypeError('Failed to fetch'))
+    : ok({ ok: false, error: 'Exception: Lock timeout: another process was holding the lock for too long.' }), 1200));
   demoBest = Math.max(demoBest, body.score || 0);
   const all = demoBoard(), i = all.findIndex(p => p.name === body.name && p.score === demoBest);
   return Promise.resolve({ ok: true, held: false, name: body.name, rank: i + 1, best: demoBest, players: all.length,
@@ -57,10 +62,20 @@ function demoPost(body) {
 const enabled = () => (!!ENDPOINT || demo()) && Date.now() < ENDS;
 const fmt = n => Number(n || 0).toLocaleString('en-US');
 
-function post(body) {
+const WAIT_MS = 25000;
+const GAME_ANSWER = /no ticket|too quick|Bad score|already saved|Too many runs|empty body|unknown type/i;
+const boardBusy = r => !!r && !r.ok && !r.closed && !r.field && !!r.error && !GAME_ANSWER.test(r.error);
+const backoff = (n, base) => Math.min(base * Math.pow(2, n), 20000) * (0.6 + Math.random() * 0.8);
+function getJSON(url, init, ms) {
+  const ac = typeof AbortController === 'function' ? new AbortController() : null;
+  const timer = ac ? setTimeout(() => ac.abort(), ms || WAIT_MS) : 0;
+  return fetch(url, Object.assign({}, init, ac ? { signal: ac.signal } : null)).then(r => r.json())
+    .then(v => { clearTimeout(timer); return v; }, e => { clearTimeout(timer); throw e; });
+}
+function post(body, ms) {
   if (demo()) return demoPost(body);
 
-  return fetch(ENDPOINT, { method: 'POST', body: JSON.stringify(body) }).then(r => r.json());
+  return getJSON(ENDPOINT, { method: 'POST', body: JSON.stringify(body) }, ms);
 }
 
 const SALT = ['hp4X', 'q7Rk', '2Lw9'].reverse().join('-');
@@ -73,12 +88,12 @@ function sign(ticket, r) {
 function runStarted() {
   clearTimeout(S.ticketTimer);
   S.run = null; S.ticketTry = 0; S.state = enabled() ? 'idle' : 'off'; S.result = null; S.error = ''; S.pending = null;
-  S.cpLate = [];
+  S.cpLate = []; S.retrying = false;
   if (enabled()) askTicket();
 }
 function askTicket() {
   S.ticketTry++;
-  post({ type: 'start', device: deviceId() }).then(r => {
+  post({ type: 'start', device: deviceId() }, 12000).then(r => {
     if (r && r.ok && r.run) { S.run = r.run; (S.cpLate || []).splice(0).forEach(checkpoint); }
     else if (r && r.closed) S.state = 'closed';
     else retry();
@@ -88,9 +103,15 @@ function askTicket() {
 function checkpoint(act) {
   if (!enabled()) return;
   if (!S.run) { (S.cpLate = S.cpLate || []).push(act); return; }
-  post({ type: 'cp', run: S.run, act }).catch(() => {});
+
+  const run = S.run;
+  let tries = 0;
+  const again = () => { if (++tries < 4 && S.run === run) setTimeout(send, backoff(tries - 1, 1500)); };
+  const send = () => post({ type: 'cp', run, act }, 10000).then(r => { if (boardBusy(r)) again(); }, again);
+  send();
 }
-function retry() { if (S.ticketTry < 4 && !S.run) S.ticketTimer = setTimeout(askTicket, 4000 * S.ticketTry); }
+
+function retry() { if (S.ticketTry < 4 && !S.run) S.ticketTimer = setTimeout(askTicket, 4000 * S.ticketTry * (0.75 + Math.random() * 0.5)); }
 
 function finish(run, opts) {
   S.onAgain = opts && opts.onAgain;
@@ -109,34 +130,66 @@ function finish(run, opts) {
   }, 1000);
 }
 
+const maybeSaved = typeof WeakSet === 'function' ? new WeakSet() : { add() {}, has: () => false };
+const SAVE_TRIES = 6, SAVE_FOR = 60000;
 function save(me) {
-  const run = S.pending; if (!run || S.busy) return;
+  const run = S.pending; if (!run || S.busy === run) return;
   if (!S.run) { S.state = 'error'; S.error = 'This run couldn\'t reach the board'; showError(S.error, true); return; }
-  S.busy = true; S.state = 'saving'; setBusy(true);
-  const ticket = S.run;
-  sign(ticket, run).then(sig => post({ type: 'score', run: ticket, device: deviceId(), name: me.name, contact: me.contact, score: run.score,
-    s1: run.s1, s2: run.s2, s3: run.s3, stats: run.stats || {}, look: run.look || '', sig })).then(r => {
-    S.busy = false; setBusy(false);
-    if (S.pending !== run) {
+  S.busy = run; S.state = 'saving'; S.retrying = false; setBusy(true);
+  const ticket = S.run, t0 = Date.now();
+  let tries = 0;
+  const body = sign(ticket, run).then(sig => ({ type: 'score', run: ticket, device: deviceId(), name: me.name, contact: me.contact,
+    score: run.score, s1: run.s1, s2: run.s2, s3: run.s3, stats: run.stats || {}, look: run.look || '', sig }));
+  const here = () => S.pending === run;
 
-      if (r && r.ok && !TABLET) setPlayer({ name: r.name || me.name, contact: me.contact });
+  const end = () => { if (S.busy !== run) return; S.busy = null; if (here()) { S.retrying = false; setBusy(false); } };
+  const again = () => {
+    if (++tries >= SAVE_TRIES || Date.now() - t0 > SAVE_FOR) return false;
+    if (here()) S.retrying = true;
+    setTimeout(send, backoff(tries - 1, 2000));
+    return true;
+  };
+  const saved = r => {
+    end();
+    if (!here()) {
+
+      if (!TABLET) setPlayer({ name: (r && r.name) || me.name, contact: me.contact });
       return;
     }
-    if (r && r.ok) {
-      setPlayer({ name: r.name || me.name, contact: me.contact });
-      S.state = 'saved'; S.result = r; S.pending = null; r.held ? showHeld(r) : showResult(r);
-    } else if (r && r.closed) {
+    setPlayer({ name: (r && r.name) || me.name, contact: me.contact });
+    S.state = 'saved'; S.pending = null;
+    if (r) { S.result = r; r.held ? showHeld(r) : showResult(r); }
+    else { S.result = { ok: true, name: me.name, best: run.score }; showSaved(S.result, run.score); }
+  };
+  const answer = r => {
+    if (r && r.ok) return saved(r);
+    const e = (r && r.error) || '';
+    if (/already saved/i.test(e) || (maybeSaved.has(run) && /no ticket/i.test(e))) return saved(null);
+    if (boardBusy(r)) {
+      if (!/Lock timeout/i.test(e)) maybeSaved.add(run);
+      if (again()) return;
+    }
+    end();
+    if (!here()) return;
+    if (r && r.closed) {
       S.state = 'closed'; S.error = 'The contest is over'; showError('The contest is over. The board is final.', true);
     } else if (r && r.field) {
       S.state = 'idle'; openForm(me, r.field, r.error);
+    } else if (boardBusy(r)) {
+      S.state = 'error'; S.error = 'The board is busy'; showError('The board is busy right now. Try again?', false);
     } else {
-      S.state = 'error'; S.error = (r && r.error) || 'Couldn\'t save'; showError(S.error, true);
+      S.state = 'error'; S.error = e || 'Couldn\'t save'; showError(S.error, true);
     }
-  }, () => {
-    S.busy = false; setBusy(false);
-    if (S.pending !== run) return;
+  };
+  const lost = () => {
+    maybeSaved.add(run);
+    if (again()) return;
+    end();
+    if (!here()) return;
     S.state = 'error'; S.error = 'No connection'; showError('No connection. Try again?', false);
-  });
+  };
+  const send = () => body.then(b => post(b, WAIT_MS)).then(answer, lost);
+  send();
 }
 
 const COPY = {
@@ -292,6 +345,7 @@ function openForm(me, badField, badMsg, mode) {
     fName, fContact, CFG.prize ? fine : null, el('div', 'row', null, [go, no]),
   ]);
   S.view = { go };
+  if (mode === 'save' && S.busy && S.busy === run) setBusy(true);
   S.onEscape = mode === 'start' ? skipStart : null;
   if (badField === 'name') bad(fName, badMsg); else if (badField === 'contact') bad(fContact, badMsg);
   fName.input.addEventListener('input', () => good(fName));
@@ -371,8 +425,12 @@ function showBoard(back) {
   mount(card);
   const me = S.result || {};
   const url = ENDPOINT + (ENDPOINT.indexOf('?') >= 0 ? '&' : '?') + 'board=1&n=' + BOARD_N + '&_=' + Date.now();
+
+  let tries = 0;
+  const ask = () => getJSON(url, { cache: 'no-store' }, 15000).then(b => { if (b && b.ok) return b; throw b; })
+    .catch(e => ++tries < 3 && card.isConnected ? new Promise(res => setTimeout(res, backoff(tries - 1, 1500))).then(ask) : Promise.reject(e));
   const load = demo() ? Promise.resolve({ ok: true, top: demoBoard().slice(0, BOARD_N), players: demoBoard().length, phase: 'open' })
-    : fetch(url, { cache: 'no-store' }).then(r => r.json());
+    : ask();
   load.then(b => {
     if (!card.isConnected) return;
     if (!b || !b.ok) throw new Error('board');
@@ -393,7 +451,7 @@ function showBoard(back) {
     if (demo()) eyebrow.textContent = 'Sample board · test link only';
     const lit = list.querySelector('.' + P + 'me');
     if (lit && lit.scrollIntoView) try { lit.scrollIntoView({ block: 'nearest' }); } catch (e) {}
-  }).catch(() => { if (card.isConnected) note.textContent = 'Couldn’t load the board. Check your connection and try again.'; });
+  }).catch(() => { if (card.isConnected) note.textContent = 'Couldn’t load the board right now. Try again in a minute.'; });
   try { done.focus({ preventScroll: true }); } catch (e) {}
 }
 
@@ -430,6 +488,19 @@ function showHeld(r) {
     el('p', 'rank', null, [fmt(S.lastScore), el('small', null, null, ['points'])]),
     el('p', 'sub', null, ['Big run. Scores like this get a quick check before they go up on the board.']),
     el('div', 'row', null, [again, TABLET ? nextButton() : null]), boardLink(() => showHeld(r)),
+  ]);
+  again.addEventListener('click', () => { unmount(); if (S.onAgain) S.onAgain(); });
+  mount(card);
+  try { again.focus({ preventScroll: true }); } catch (e) {}
+}
+
+function showSaved(r, score) {
+  const again = el('button', 'go', { type: 'button' }, [COPY.again]);
+  const card = el('div', 'card', null, [
+    el('p', 'eyebrow', null, ['Saved as ' + (r.name || '')]),
+    el('p', 'rank', null, [fmt(score), el('small', null, null, ['points'])]),
+    el('p', 'sub', null, ['Your run is saved.']),
+    el('div', 'row', null, [again, TABLET ? nextButton() : null]), boardLink(() => showSaved(r, score)),
   ]);
   again.addEventListener('click', () => { unmount(); if (S.onAgain) S.onAgain(); });
   mount(card);
@@ -486,6 +557,7 @@ window.Scores = {
   isOpen: () => !!S.root,
   status: () => ({ state: S.state, rank: S.result && S.result.rank, best: S.result && S.result.best,
     players: S.result && S.result.players, held: !!(S.result && S.result.held), error: S.error,
+    retrying: S.state === 'saving' && !!S.retrying,
     practice: !!(S.result && S.result.phase === 'practice') }),
   checkpoint,
   allowTestRuns: TEST,

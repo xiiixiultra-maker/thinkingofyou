@@ -54,7 +54,7 @@ const UA = navigator.userAgent || '';
 const CHROMIUM = /Chrome\/\d+/.test(UA) && !/iPad|iPhone|iPod/.test(UA);
 const ADAPT = !QPIN && (CHROMIUM || Q.has('adapt'));
 const DBG = Q.has('dbg') || !!window.LTWH_DBG;
-const BUILD = '12b';
+const BUILD = '12c';
 const RQ = { steps: [1, 0.85, 0.72, 0.6], i: 0, state: ADAPT ? 'watch' : 'done', n: 0, ms: 0, slow: 0, wait: 0, last: 0, mode: '', base: 0, best: 0, from: 0, log: [] };
 try { const v = +sessionStorage.getItem('ltwh-rq'); if (ADAPT && v >= 1 && v < RQ.steps.length) RQ.i = v; } catch (e) {}
 const renderScale = () => QPIN || RQ.steps[RQ.i];
@@ -1305,7 +1305,9 @@ function drawEnd(t) {
 
   const closedNow = !!window.Scores && typeof Scores.closed === 'function' && Scores.closed();
   const board = closedNow || (sc && sc.state === 'closed') ? 'Board closed   ·   ' + G.misses + (G.misses === 1 ? ' miss' : ' misses')
-    : !sc ? '' : sc.state === 'saved' ? (sc.held ? 'Saved, in review' : '#' + sc.rank + (sc.practice ? ' in practice' : ' on the board')) : sc.state === 'saving' ? 'Saving to the board…'
+    : !sc ? '' : sc.state === 'saved' ? (sc.held ? 'Saved, in review' : !sc.rank ? 'Saved to the board'
+      : '#' + sc.rank + (sc.practice ? ' in practice' : ' on the board'))
+    : sc.state === 'saving' ? (sc.retrying ? 'Board busy, still saving…' : 'Saving to the board…')
     : sc.state === 'error' ? 'Not saved to the board' : '';
   txt((G.newBest ? 'New best!' : 'Your best: ' + best) + (board ? '   ·   ' + board : ''), cx, y, 14, C.gold, 'center', 800, 1); y += 30;
   if (t - G.endedAt > 1.2) txt('TAP TO RUN AGAIN', cx, Math.min(y, top + ph - 14), 15, C.cream, 'center', 900, 4);
