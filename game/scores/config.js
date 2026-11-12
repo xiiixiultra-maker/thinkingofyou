@@ -8,11 +8,9 @@ window.LTWH_SCORES = {
   opensLabel: 'Thu, Nov 12 at 9 AM ET',
   endsAt: '2026-11-14T15:00:00-05:00',
   endsLabel: 'Sat, Nov 14 at 3 PM ET',
-  finalLabel: '4 PM',
-  winnerLabel: '5 PM',
 
-  prize: 'Top 3 play for a free pair.',
-  fine: 'Live final at 4 PM ET, in the store or on a video call. US residents 18+. No purchase needed.',
+  prize: 'Highest score wins a free pair.',
+  fine: '2nd and 3rd win a Shoe Gallery tee and socks. US residents 18+. No purchase needed.',
   rulesUrl: 'rules.html',
   playUrl: 'thinkingofyou.shoegallery.app/game',
 };

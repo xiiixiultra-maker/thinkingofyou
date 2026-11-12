@@ -37,10 +37,28 @@ const deviceId = () => TABLET ? 'tab-' + device + '-' + playerN : device;
 const S = { run: null, ticketTry: 0, ticketTimer: 0, state: 'idle', result: null, error: '', pending: null, onAgain: null,
   onNext: null, root: null, pill: null, view: null, busy: false, idleTimer: 0 };
 
-const enabled = () => !!ENDPOINT && Date.now() < ENDS;
+const demo = () => !ENDPOINT && !!window.LTWH_DBG;
+let demoBest = 0;
+function demoBoard() {
+  const me = getPlayer() || {}, rows = [];
+  for (let i = 0; i < 30; i++) rows.push({ name: 'Runner ' + (i + 1), score: 5400 - i * 141 - (i % 4) * 17 });
+  if (me.name && demoBest) rows.push({ name: me.name, score: demoBest });
+  return rows.sort((a, b) => b.score - a.score);
+}
+function demoPost(body) {
+  if (body.type === 'start') return Promise.resolve({ ok: true, run: 'demo-' + Date.now() });
+  if (body.type !== 'score') return Promise.resolve({ ok: true });
+  demoBest = Math.max(demoBest, body.score || 0);
+  const all = demoBoard(), i = all.findIndex(p => p.name === body.name && p.score === demoBest);
+  return Promise.resolve({ ok: true, held: false, name: body.name, rank: i + 1, best: demoBest, players: all.length,
+    toBeat: all[0].score, phase: 'open', open: true });
+}
+
+const enabled = () => (!!ENDPOINT || demo()) && Date.now() < ENDS;
 const fmt = n => Number(n || 0).toLocaleString('en-US');
 
 function post(body) {
+  if (demo()) return demoPost(body);
 
   return fetch(ENDPOINT, { method: 'POST', body: JSON.stringify(body) }).then(r => r.json());
 }
@@ -126,9 +144,10 @@ const COPY = {
   title: 'Put your name on the board',
   name: 'Your name on the board', nameHint: '2 to 14 letters',
 
-  contact: 'IG or phone', contactHint: CFG.prize ? 'Only so we can reach you if you make the final. Never shown.' : 'Only so we can reach you. Never shown.',
+  contact: 'IG or phone', contactHint: CFG.prize ? 'Only so we can reach you if you win. Never shown.' : 'Only so we can reach you. Never shown.',
   save: 'Save my score', later: 'Not now', again: 'Run again', change: 'Not you? Change name', saveName: 'Save name',
   pill: 'Put me on the board',
+  board: 'See the full leaderboard', boardTitle: 'The leaderboard', back: 'Back',
   startSub: 'Once is enough. Every run after this saves to the board on its own.',
   startSubTablet: 'You’re on the store tablet. Your name and IG clear off it after your run.',
   startGo: 'Let’s run', skip: 'Skip', next: 'Next player',
@@ -196,6 +215,18 @@ function css() {
  background:#FFF6E5;color:#15130F;font:700 15px "${P}ui",system-ui,sans-serif;box-shadow:0 10px 26px -10px rgba(0,0,0,.7);
  animation:${P}fade .25s ease;touch-action:manipulation}
 .${P}pill::before{content:"";width:10px;height:10px;border-radius:50%;background:#F28C28}
+.${P}board{list-style:none;margin:4px 0 14px;padding:0;max-height:min(50vh,430px);overflow:auto;-webkit-overflow-scrolling:touch;
+ overscroll-behavior:contain;border-radius:12px;background:rgba(255,246,229,.05);box-shadow:inset 0 0 0 1px rgba(255,246,229,.12)}
+.${P}board li{display:flex;align-items:baseline;gap:10px;padding:10px 12px;border-top:1px solid rgba(255,246,229,.08)}
+.${P}board li:first-child{border-top:0}
+.${P}board .${P}n{width:2.4em;flex:none;font:400 18px/1 "${P}num",Impact,sans-serif;color:rgba(255,246,229,.55)}
+.${P}board li:nth-child(-n+3):not(.${P}gap) .${P}n{color:#F5D061}
+.${P}board .${P}nm{flex:1;min-width:0;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.${P}board .${P}pts{flex:none;font:400 20px/1 "${P}num",Impact,sans-serif;letter-spacing:.02em}
+.${P}board li.${P}me{background:rgba(242,140,40,.2)}
+.${P}board li.${P}me .${P}nm{font-weight:700}
+.${P}board li.${P}gap{border-top:1px dashed rgba(255,246,229,.3)}
+.${P}you{margin-left:6px;font-weight:700;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#F5D061}
 @keyframes ${P}fade{from{opacity:0}}
 @keyframes ${P}up{from{opacity:0;transform:translateY(16px) scale(.98)}}
 @media (max-height:460px){.${P}card{padding:16px 18px 14px}.${P}title{font-size:22px}.${P}field input{height:44px}
@@ -316,6 +347,56 @@ function skipStart() {
   startNow();
 }
 
+const BOARD_N = 25;
+function boardLink(back) {
+  const b = el('button', 'link', { type: 'button' }, [COPY.board]);
+  b.addEventListener('click', () => showBoard(back));
+  return b;
+}
+function boardRow(n, name, score, cls) {
+  const nm = el('span', 'nm', null, [name]);
+  if (cls && cls.indexOf('me') >= 0) nm.append(el('span', 'you', null, ['You']));
+  return el('li', cls || null, null, [el('span', 'n', null, [String(n)]), nm, el('span', 'pts', null, [fmt(score)])]);
+}
+function showBoard(back) {
+  const again = el('button', 'go', { type: 'button' }, [COPY.again]);
+  const done = el('button', 'ghost', { type: 'button' }, [COPY.back]);
+  const note = el('p', 'sub', null, ['Loading the board…']);
+  const list = el('ol', 'board', { 'aria-label': COPY.boardTitle }, []);
+  const eyebrow = el('p', 'eyebrow', null, [COPY.eyebrow]);
+  const card = el('div', 'card', null, [eyebrow, el('h2', 'title', null, [COPY.boardTitle]), note, list,
+    el('div', 'row', null, [again, done])]);
+  again.addEventListener('click', () => { unmount(); if (S.onAgain) S.onAgain(); });
+  done.addEventListener('click', () => { if (back) back(); else unmount(); });
+  mount(card);
+  const me = S.result || {};
+  const url = ENDPOINT + (ENDPOINT.indexOf('?') >= 0 ? '&' : '?') + 'board=1&n=' + BOARD_N + '&_=' + Date.now();
+  const load = demo() ? Promise.resolve({ ok: true, top: demoBoard().slice(0, BOARD_N), players: demoBoard().length, phase: 'open' })
+    : fetch(url, { cache: 'no-store' }).then(r => r.json());
+  load.then(b => {
+    if (!card.isConnected) return;
+    if (!b || !b.ok) throw new Error('board');
+    const top = b.top || [], ph = b.phase || '';
+    let mine = me.name ? top.findIndex(p => p.name === me.name && p.score === me.best) : -1;
+    top.forEach((p, i) => list.append(boardRow(i + 1, p.name, p.score, i === mine ? 'me' : '')));
+    if (mine < 0 && me.name && me.rank > top.length && me.best) list.append(boardRow(me.rank, me.name, me.best, 'me gap'));
+    if (ph === 'practice') {
+      eyebrow.textContent = 'Practice round';
+      note.textContent = 'The board resets to zero when the contest opens ' + (CFG.opensLabel || 'soon') + '.';
+    } else if (ph === 'closed') {
+      note.textContent = 'The board is closed. Winners announced on our Instagram.';
+    } else {
+      note.textContent = fmt(b.players) + (b.players === 1 ? ' player' : ' players') + ' so far. Highest score at the close wins. The board closes '
+        + (CFG.endsLabel || 'soon') + '.';
+    }
+    if (!top.length) note.textContent += ' No scores yet.';
+    if (demo()) eyebrow.textContent = 'Sample board · test link only';
+    const lit = list.querySelector('.' + P + 'me');
+    if (lit && lit.scrollIntoView) try { lit.scrollIntoView({ block: 'nearest' }); } catch (e) {}
+  }).catch(() => { if (card.isConnected) note.textContent = 'Couldn’t load the board. Check your connection and try again.'; });
+  try { done.focus({ preventScroll: true }); } catch (e) {}
+}
+
 function showResult(r) {
   const me = r.rank, practice = r.phase === 'practice';
   const again = el('button', 'go', { type: 'button' }, [COPY.again]);
@@ -335,7 +416,7 @@ function showResult(r) {
     el('p', 'eyebrow', null, [(practice ? 'Practice run · ' : '') + 'Saved as ' + (r.name || '')]),
     el('p', 'rank', null, ['#' + me, el('small', null, null, [practice ? 'for now' : 'on the board'])]),
     el('p', 'sub', null, [sub]),
-    el('div', 'row', null, [again, TABLET ? nextButton() : null]), change,
+    el('div', 'row', null, [again, TABLET ? nextButton() : null]), boardLink(() => showResult(r)), change,
   ]);
   again.addEventListener('click', () => { unmount(); if (S.onAgain) S.onAgain(); });
   mount(card);
@@ -348,7 +429,7 @@ function showHeld(r) {
     el('p', 'eyebrow', null, ['Saved as ' + (r.name || '')]),
     el('p', 'rank', null, [fmt(S.lastScore), el('small', null, null, ['points'])]),
     el('p', 'sub', null, ['Big run. Scores like this get a quick check before they go up on the board.']),
-    el('div', 'row', null, [again, TABLET ? nextButton() : null]),
+    el('div', 'row', null, [again, TABLET ? nextButton() : null]), boardLink(() => showHeld(r)),
   ]);
   again.addEventListener('click', () => { unmount(); if (S.onAgain) S.onAgain(); });
   mount(card);
