@@ -1,25 +1,15 @@
-/* The Long Way Home preview: the gate (index.html) decrypts the game into Cache Storage on this device; this worker
-   serves it under app/, so the game runs unchanged. Anything not unlocked yet goes back to the gate. */
-const CACHE = 'ltwh-game';
+/* The Long Way Home is public now (no code). On a device that unlocked the preview, this takes over from the preview's
+   worker: it deletes the preview's copy of the game, sends an open preview page to the public game (or the store TV's
+   board to its new home), and steps aside. */
 self.addEventListener('install', () => self.skipWaiting());
-self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
-self.addEventListener('fetch', e => {
-  const u = new URL(e.request.url), app = new URL('app/', self.registration.scope);
-  if (u.origin !== app.origin || !u.pathname.startsWith(app.pathname)) return;
-  e.respondWith((async () => {
-    const c = await caches.open(CACHE);
-    if (e.request.mode === 'navigate') {      // opening the game: if a newer build is out, back through the gate to get it
-      try {
-        const r = await fetch(new URL('bundle.json', self.registration.scope).href, { cache: 'no-cache' });
-        if (r.ok) {
-          const M = await r.json(), have = await c.match(new URL('app/__v', self.registration.scope).href);
-          if (!have || (await have.text()) !== M.v) { await caches.delete(CACHE); return Response.redirect(self.registration.scope, 302); }
-        }
-      } catch (err) { /* offline: play the build that's here */ }
-    }
-    const hit = await c.match(new URL(u.pathname.endsWith('/') ? u.pathname + 'index.html' : u.pathname, u.origin).href);
-    if (hit) return hit;
-    if (e.request.mode === 'navigate') return Response.redirect(self.registration.scope, 302);
-    return new Response('Not found', { status: 404, headers: { 'Content-Type': 'text/plain' } });
-  })());
-});
+self.addEventListener('activate', e => e.waitUntil((async () => {
+  // unregister first: the pages it still controls keep it until they move on, and nothing waits on their navigation
+  const scope = self.registration.scope, app = new URL('app/', scope).pathname;
+  try { await caches.delete('ltwh-game'); } catch (err) {}
+  try { await self.registration.unregister(); } catch (err) {}
+  // index.html, not game/ itself: the browser may still hold the preview's gate for game/ in its HTTP cache (max-age)
+  for (const c of await self.clients.matchAll({ type: 'window' })) {
+    const p = new URL(c.url).pathname;
+    if (p.startsWith(app)) c.navigate(new URL(p.endsWith('scores/board.html') ? 'board/' : 'index.html', scope).href).catch(() => {});
+  }
+})()));
